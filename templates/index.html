@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vartalap</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>Vartalap</h1>
+        <p class="subtitle">Browser + Terminal chat rooms</p>
+      </header>
+
+      <section id="profile-section" class="card">
+        <h2>Profile</h2>
+        <div class="grid">
+          <label>
+            Username
+            <input id="username" type="text" autocomplete="username" />
+          </label>
+          <label>
+            Password
+            <input id="password" type="password" autocomplete="current-password" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="create-profile">Create</button>
+          <button id="login-profile">Login</button>
+        </div>
+        <p id="profile-status" class="status"></p>
+      </section>
+
+      <section id="rooms-section" class="card hidden">
+        <div class="header-row">
+          <h2>Existing Rooms</h2>
+          <button id="refresh-rooms">Refresh</button>
+        </div>
+        <div id="rooms-list" class="list"></div>
+      </section>
+
+      <section id="create-room-section" class="card hidden">
+        <h2>Create Room</h2>
+        <div class="grid">
+          <label>
+            Room Name
+            <input id="room-name" type="text" />
+          </label>
+          <label>
+            Room Password (optional)
+            <input id="room-password" type="password" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="create-room">Create Room</button>
+        </div>
+        <p id="create-room-status" class="status"></p>
+      </section>
+
+      <section id="join-room-section" class="card hidden">
+        <h2>Join Room</h2>
+        <div class="grid">
+          <label>
+            Room Code
+            <input id="join-room-code" type="text" />
+          </label>
+          <label>
+            Room Password
+            <input id="join-room-password" type="password" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="join-room">Join Room</button>
+        </div>
+        <p id="join-room-status" class="status"></p>
+      </section>
+
+      <section id="chat-section" class="card hidden">
+        <div class="header-row">
+          <h2 id="room-title">Room</h2>
+          <button id="leave-room">Leave</button>
+        </div>
+        <div id="messages" class="messages"></div>
+        <div class="chat-input">
+          <input id="message-input" type="text" placeholder="Type a message..." />
+          <button id="send-message">Send</button>
+        </div>
+        <p id="chat-status" class="status"></p>
+      </section>
+    </div>
+
+    <script src="/static/script.js"></script>
+  </body>
+</html>
