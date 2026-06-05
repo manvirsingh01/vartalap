@@ -88,7 +88,7 @@ if [[ ! -d "$VENV_DIR" ]]; then
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-"$VENV_DIR/bin/pip" install flask >/dev/null
+"$VENV_DIR/bin/pip" install flask cryptography >/dev/null
 
 if [[ "$WITH_SYSTEMD" -eq 1 || "$WITH_APACHE" -eq 1 ]]; then
   if [[ "${EUID}" -ne 0 ]]; then

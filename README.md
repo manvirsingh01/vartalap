@@ -6,7 +6,7 @@ Network chat app with a TCP terminal client and a Flask browser UI.
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/pip install flask
+./.venv/bin/pip install flask cryptography
 ./.venv/bin/python server.py --tcp-host 0.0.0.0 --http-host 127.0.0.1
 ```
 
@@ -25,7 +25,7 @@ python3 client_terminal.py --host 127.0.0.1 --port 9009
 ```
 
 What it does:
-- Creates `.venv` and installs Flask
+- Creates `.venv` and installs Flask + cryptography
 - (Optional) Sets up a systemd service
 - (Optional) Creates an Apache reverse proxy config
 
@@ -42,3 +42,9 @@ sudo systemctl reload apache2
 
 Make sure the Flask server is running on `127.0.0.1:5000` and the TCP port `9009`
 is open for terminal clients.
+
+## Message encryption
+
+Messages are AES-GCM encrypted on the clients. The key is derived from the room
+password, or from the room code if no password is set. The browser UI requires
+HTTPS (or localhost) so the Web Crypto API is available.

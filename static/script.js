@@ -1,6 +1,7 @@
 const state = {
   username: null,
   roomCode: null,
+  roomKey: null,
   lastMessageId: 0,
   pollTimer: null,
 }
@@ -42,6 +43,84 @@ function showSections() {
 function showChat(show) {
   const chatSection = document.getElementById("chat-section")
   chatSection.classList.toggle("hidden", !show)
+}
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let binary = ""
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+}
+
+function fromBase64(base64) {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
+async function deriveRoomKey(roomCode, password) {
+  if (!window.crypto || !window.crypto.subtle) {
+    throw new Error("Web Crypto not available. Use HTTPS or localhost.")
+  }
+  const encoder = new TextEncoder()
+  const base = password || roomCode
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(base),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  )
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: encoder.encode(`vartalap:${roomCode}`),
+      iterations: 100000,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  )
+}
+
+async function encryptText(text) {
+  if (!state.roomKey) {
+    throw new Error("Room key not ready.")
+  }
+  const encoder = new TextEncoder()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    state.roomKey,
+    encoder.encode(text),
+  )
+  return { ciphertext: toBase64(ciphertext), iv: toBase64(iv) }
+}
+
+async function decryptText(ciphertext, iv) {
+  if (!state.roomKey) {
+    return null
+  }
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: fromBase64(iv) },
+      state.roomKey,
+      fromBase64(ciphertext),
+    )
+    return new TextDecoder().decode(plaintext)
+  } catch (error) {
+    if (error && error.name === "OperationError") {
+      return null
+    }
+    throw error
+  }
 }
 
 async function createProfile(create) {
@@ -132,11 +211,13 @@ async function joinRoom() {
     })
     state.roomCode = data.code
     state.lastMessageId = 0
+    state.roomKey = await deriveRoomKey(data.code, password)
     document.getElementById("room-title").textContent = `Room ${data.code}`
     document.getElementById("messages").innerHTML = ""
     setStatus(joinRoomStatus, data.message)
     showChat(true)
     await loadMessages(true)
+    await updateMembers()
   } catch (error) {
     setStatus(joinRoomStatus, error.message, true)
   }
@@ -147,6 +228,8 @@ async function leaveRoom() {
     const data = await apiRequest("/api/rooms/leave", { method: "POST" })
     state.roomCode = null
     state.lastMessageId = 0
+    state.roomKey = null
+    renderMembers([])
     setStatus(chatStatus, data.message)
     showChat(false)
   } catch (error) {
@@ -165,9 +248,10 @@ async function sendMessage() {
     return
   }
   try {
+    const payload = await encryptText(text)
     await apiRequest(`/api/rooms/${state.roomCode}/messages`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     })
     input.value = ""
     await loadMessages(false)
@@ -184,10 +268,63 @@ async function loadMessages(showAll) {
   try {
     const data = await apiRequest(`/api/rooms/${state.roomCode}/messages${since}`)
     const messages = data.messages || []
-    renderMessages(messages)
+    const decoded = await decodeMessages(messages)
+    renderMessages(decoded)
   } catch (error) {
     setStatus(chatStatus, error.message, true)
   }
+}
+
+async function decodeMessages(messages) {
+  const decoded = []
+  for (const message of messages) {
+    if (message.text) {
+      decoded.push(message)
+      continue
+    }
+    if (message.ciphertext && message.iv) {
+      const text = await decryptText(message.ciphertext, message.iv)
+      decoded.push({ ...message, text: text || "[Encrypted message - unable to decrypt]" })
+      continue
+    }
+    decoded.push({ ...message, text: "[Unsupported message]" })
+  }
+  return decoded
+}
+
+async function updateMembers() {
+  if (!state.roomCode) {
+    return
+  }
+  try {
+    const data = await apiRequest(`/api/rooms/${state.roomCode}/members`)
+    renderMembers(data.members || [])
+  } catch (error) {
+    setStatus(chatStatus, error.message, true)
+  }
+}
+
+function renderMembers(members) {
+  const list = document.getElementById("members-list")
+  list.innerHTML = ""
+  if (!members.length) {
+    list.textContent = "No members yet."
+    return
+  }
+  members.forEach((member) => {
+    const item = document.createElement("div")
+    item.className = "list-item"
+    const name = document.createElement("div")
+    name.textContent = member.username
+    const status = document.createElement("div")
+    const online = member.online ? "Online" : "Offline"
+    const inRoom = member.in_room ? "In room" : "Away"
+    status.textContent = `${online} · ${inRoom}`
+    status.className = `member-status ${member.online ? "online" : "offline"}`
+    item.appendChild(name)
+    item.appendChild(status)
+    list.appendChild(item)
+  })
 }
 
 function renderMessages(messages) {
@@ -212,6 +349,7 @@ function startPolling() {
   state.pollTimer = setInterval(() => {
     if (state.roomCode) {
       loadMessages(false)
+      updateMembers()
     }
   }, 2000)
 }

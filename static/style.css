@@ -96,6 +96,22 @@ button:hover {
   gap: 8px;
 }
 
+.members-panel {
+  margin-bottom: 12px;
+}
+
+.member-status {
+  font-weight: 600;
+}
+
+.member-status.online {
+  color: #047857;
+}
+
+.member-status.offline {
+  color: #b91c1c;
+}
+
 .list-item {
   display: flex;
   align-items: center;

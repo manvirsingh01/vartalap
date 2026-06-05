@@ -47,6 +47,7 @@ class ChatState:
             self.users = self._load_file(USERS_FILE, "users")
             for room in self.rooms.values():
                 room.setdefault("messages", [])
+                room.setdefault("members", [])
             self._recompute_next_message_id()
 
     def _load_file(self, path: Path, key: str) -> Dict[str, Any]:
@@ -173,6 +174,9 @@ class ChatState:
                 for message in room.get("messages", []):
                     if message.get("sender") == old:
                         message["sender"] = new
+                members = room.get("members", [])
+                if old in members:
+                    room["members"] = [new if member == old else member for member in members]
             if old in self.active_user_counts:
                 self.active_user_counts[new] = self.active_user_counts.pop(old)
             for room_code, counts in self.room_user_counts.items():
@@ -209,6 +213,7 @@ class ChatState:
                 "password_hash": hash_secret(password) if password else None,
                 "created_at": utc_now(),
                 "owner": owner,
+                "members": [owner],
                 "messages": [],
             }
             self.save_rooms()
@@ -222,6 +227,9 @@ class ChatState:
             password_hash = room.get("password_hash")
             if password_hash and not verify_secret(password, password_hash):
                 return False, "Invalid room password."
+            members = room.setdefault("members", [])
+            if username not in members:
+                members.append(username)
             self.add_room_member(code, username)
             return True, "Joined room."
 
@@ -229,9 +237,18 @@ class ChatState:
         with self.lock:
             self.remove_room_member(code, username)
 
-    def add_message(self, room_code: str, username: str, text: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        if not text:
+    def add_message(
+        self,
+        room_code: str,
+        username: str,
+        text: str,
+        ciphertext: Optional[str],
+        iv: Optional[str],
+    ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        if not text and not ciphertext:
             return False, "Message cannot be empty.", None
+        if ciphertext and not iv:
+            return False, "Missing encryption IV.", None
         with self.lock:
             room = self.rooms.get(room_code)
             if not room:
@@ -240,8 +257,13 @@ class ChatState:
                 "id": self.next_message_id,
                 "ts": utc_now(),
                 "sender": username,
-                "text": text,
             }
+            if ciphertext:
+                message["encrypted"] = True
+                message["ciphertext"] = ciphertext
+                message["iv"] = iv
+            else:
+                message["text"] = text
             self.next_message_id += 1
             room["messages"].append(message)
             if len(room["messages"]) > MAX_MESSAGES:
@@ -280,6 +302,27 @@ class ChatState:
 
     def list_active_users(self) -> List[str]:
         return sorted(self.active_user_counts.keys())
+
+    def list_room_members(self, room_code: str) -> Tuple[bool, str, List[Dict[str, Any]]]:
+        with self.lock:
+            room = self.rooms.get(room_code)
+            if not room:
+                return False, "Room not found.", []
+            members = room.get("members", [])
+            results = []
+            for username in members:
+                is_online = username in self.active_user_counts
+                in_room = username in self.room_user_counts.get(room_code, {})
+                user_data = self.users.get(username, {})
+                results.append(
+                    {
+                        "username": username,
+                        "online": is_online,
+                        "in_room": in_room,
+                        "last_seen": user_data.get("last_seen"),
+                    }
+                )
+            return True, "Members loaded.", results
 
     def _generate_room_code(self) -> str:
         while True:
@@ -364,6 +407,17 @@ class ChatTCPHandler(socketserver.StreamRequestHandler):
             return {"ok": ok, "message": message} if ok else {"ok": False, "error": message}
         if request_type == "rooms_list":
             return {"ok": True, "rooms": self.state.list_rooms()}
+        if request_type == "room_members":
+            guard = self._require_username()
+            if guard:
+                return guard
+            code = (payload.get("code") or self.room_code or "").strip().upper()
+            if not code:
+                return {"ok": False, "error": "No room selected."}
+            ok, message, members = self.state.list_room_members(code)
+            if ok:
+                return {"ok": True, "message": message, "members": members}
+            return {"ok": False, "error": message}
         if request_type == "users_list":
             return {"ok": True, "users": self.state.list_active_users()}
         if request_type == "room_create":
@@ -408,7 +462,9 @@ class ChatTCPHandler(socketserver.StreamRequestHandler):
             if not code:
                 return {"ok": False, "error": "No room selected."}
             text = (payload.get("text") or "").strip()
-            ok, message, saved = self.state.add_message(code, self.username, text)
+            ciphertext = payload.get("ciphertext")
+            iv = payload.get("iv")
+            ok, message, saved = self.state.add_message(code, self.username, text, ciphertext, iv)
             if ok:
                 return {"ok": True, "message": message, "saved": saved}
             return {"ok": False, "error": message}
@@ -569,6 +625,14 @@ def create_app(state: ChatState):
             return jsonify({"ok": False, "error": message}), 404
         return jsonify({"ok": True, "message": message, "messages": messages})
 
+    @app.route("/api/rooms/<code>/members", methods=["GET"])
+    def api_room_members(code: str):
+        code = code.strip().upper()
+        ok, message, members = state.list_room_members(code)
+        if not ok:
+            return jsonify({"ok": False, "error": message}), 404
+        return jsonify({"ok": True, "message": message, "members": members})
+
     @app.route("/api/rooms/<code>/messages", methods=["POST"])
     def api_room_send_message(code: str):
         username = require_user()
@@ -579,7 +643,9 @@ def create_app(state: ChatState):
             return jsonify({"ok": False, "error": "Join the room first."}), 400
         data = request.get_json(silent=True) or {}
         text = (data.get("text") or "").strip()
-        ok, message, saved = state.add_message(code, username, text)
+        ciphertext = data.get("ciphertext")
+        iv = data.get("iv")
+        ok, message, saved = state.add_message(code, username, text, ciphertext, iv)
         if not ok:
             return jsonify({"ok": False, "error": message}), 400
         return jsonify({"ok": True, "message": message, "saved": saved})
